@@ -23,7 +23,7 @@
 #import "OVCManagedModelResponseSerializer_Internal.h"
 #import "OVCResponse.h"
 #import <CoreData/CoreData.h>
-#import "MTLManagedObjectAdapter.h"
+#import <MTLManagedObjectAdapter/MTLManagedObjectAdapter.h>
 #import "OVCManagedObjectSerializingContainer.h"
 
 @interface OVCManagedModelResponseSerializer ()
@@ -63,6 +63,18 @@
         }
         
         if (result) {
+            //If class is not Account type, then, delete all objects
+            if (![NSStringFromClass(resultClass) isEqualToString:@"Account"]){
+                NSMutableArray * mutableArray = [NSMutableArray arrayWithArray:[NSArray array]];
+                if ([result isKindOfClass:[NSArray class]]){
+                    for (NSUInteger i = 0; i < ((NSArray*)result).count; i++) {
+                        if ([((NSArray*)result)[i] respondsToSelector:@selector(primaryId)]){
+                            [mutableArray addObject:[((NSArray*)result)[i] performSelector:@selector(primaryId)]];
+                        }
+                    }
+                }
+                if (mutableArray.count > 0) [self deleteAllEntitiesFromClass:NSStringFromClass(resultClass) withRepeatedObjects:mutableArray];
+            }
             [self saveResult:result];
         }
     }
@@ -78,7 +90,7 @@
     
     [context performBlockAndWait:^{
         NSArray *models = [result isKindOfClass:[NSArray class]] ? result : @[result];
-
+        
         for (MTLModel<MTLManagedObjectSerializing> *model in models) {
             NSError *error = nil;
             [MTLManagedObjectAdapter managedObjectFromModel:model
@@ -86,7 +98,7 @@
                                                       error:&error];
             NSAssert(error == nil, @"%@ saveResult failed with error: %@", self, error);
         }
-
+        
         if (context.hasChanges) {
             NSError *error = nil;
             [context save:&error];
@@ -95,4 +107,32 @@
     }];
 }
 
+#pragma mark - Custom
+
+//Delete all objects not contained on the array
+- (void) deleteAllEntitiesFromClass: (NSString *) entityName withRepeatedObjects : (NSArray*) arrayOfExcludedIds{
+    
+    NSFetchRequest * fetchRequest = [NSFetchRequest fetchRequestWithEntityName:entityName];
+    //only fetch the managedObjectID
+    [fetchRequest setIncludesPropertyValues:NO];
+    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"NOT (primaryId IN %@)", arrayOfExcludedIds];
+    
+    [fetchRequest setPredicate:predicate];
+    
+    NSManagedObjectContext *context = self.managedObjectContext;
+    
+    NSMutableArray * objects = [NSMutableArray arrayWithArray:[context executeFetchRequest:fetchRequest error:nil]];
+    [context performBlockAndWait:^{
+        for (NSManagedObject * object in objects) {
+            //Delete the object
+            [context deleteObject:object];
+        }
+        
+        if (context.hasChanges) {
+            NSError *error = nil;
+            [context save:&error];
+            NSAssert(error == nil, @"%@ saveResult failed with error: %@", self, error);
+        }
+    }];
+}
 @end
